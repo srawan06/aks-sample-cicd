@@ -1,0 +1,47 @@
+# Trimmed-down kube-prometheus-stack config, sized for a single
+# Standard_B2s_v2 node that's already running the sample app + NGINX
+# ingress controller. Installed via .github/workflows/monitoring.yml.
+#
+# Grafana is exposed through the EXISTING ingress controller (same public
+# IP as the app - see k8s/ingress.yaml) rather than a dedicated
+# LoadBalancer, to avoid using a third public IP.
+
+alertmanager:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 512Mi
+    retention: 6h
+
+grafana:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.vitalsoftai.com
+  grafana.ini:
+    server:
+      root_url: "http://grafana.vitalsoftai.com"

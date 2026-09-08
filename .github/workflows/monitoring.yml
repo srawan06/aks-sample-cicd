@@ -1,0 +1,49 @@
+name: Monitoring - Install Prometheus & Grafana
+
+on:
+  workflow_dispatch: {} # manual trigger - not something you want auto-applying
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/**'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  install-monitoring:
+    name: Install kube-prometheus-stack via Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}" \
+            --name "${{ vars.AKS_CLUSTER_NAME || 'aks-sample-cluster' }}" \
+            --admin --overwrite-existing
+
+      - name: Install/upgrade kube-prometheus-stack
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --namespace monitoring --create-namespace \
+            -f monitoring/values.yaml \
+            --set grafana.adminPassword="${{ secrets.GRAFANA_ADMIN_PASSWORD }}" \
+            --timeout 10m
+
+      - name: Show status
+        run: |
+          kubectl get pods -n monitoring
+          echo "---"
+          kubectl get ingress -n monitoring
