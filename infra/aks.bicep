@@ -27,7 +27,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
     disableLocalAccounts: false // keep simple kubeconfig auth for learning
     agentPoolProfiles: [
       {
-        name: 'systempool'
+        name: 'nodepool1'
         count: 1 // single-node constraint
         vmSize: nodeVmSize
         osType: 'Linux'
