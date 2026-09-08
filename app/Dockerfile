@@ -15,11 +15,14 @@ WORKDIR /app
 # shipped image, since we don't need npm here at all.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
+
 # Run as non-root (security best practice, also required by many
-# Kubernetes Pod Security Standards / OPA policies)
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Kubernetes Pod Security Standards / OPA policies). Use a numeric UID
+# (not just a named user) so Kubernetes' runAsNonRoot check can verify
+# this without needing to execute the image first.
+RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
 COPY --from=build /app /app
-USER appuser
+USER 1001
 
 ENV PORT=3000
 EXPOSE 3000
