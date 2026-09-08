@@ -1,14 +1,14 @@
 name: Infra - Provision AKS
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch: {} # manual trigger - infra changes shouldn't auto-apply
   push:
     branches: [main]
     paths:
       - 'infra/**'
 
 permissions:
-  id-token: write
+  id-token: write   # required for OIDC login to Azure
   contents: read
 
 jobs:
@@ -17,13 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Run Checkov against Bicep
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: infra
           framework: bicep
           quiet: true
-          soft_fail: true
+          soft_fail: true   # start permissive; flip to false once you've triaged findings
 
   deploy-infra:
     name: Deploy AKS via Bicep
@@ -39,11 +40,39 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Create resource group (idempotent)
+      # NOTE: this subscription rejects subscription-scope AKS deployments
+      # (az deployment sub create / what-if) with a generic
+      # "RequestDisallowedByAzure / best available regions" error, even
+      # though the identical AKS spec succeeds at resource-group scope.
+      # So we create the resource group as a plain CLI step, then deploy
+      # the Bicep template into it at resource-group scope.
+      #
+      # This subscription's public IP quota (3) and AKS access were only
+      # confirmed to work in uaenorth - we enforce that region here so a
+      # future change to AZURE_LOCATION can't silently create resources
+      # in an unverified region.
+      - name: Create resource group (idempotent, region-locked)
         run: |
-          az group create \
-            --name "${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}" \
-            --location "${{ vars.AZURE_LOCATION || 'uaenorth' }}"
+          REQUIRED_LOCATION="uaenorth"
+          RG="${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}"
+          CONFIGURED_LOCATION="${{ vars.AZURE_LOCATION || 'uaenorth' }}"
+
+          if [ "$CONFIGURED_LOCATION" != "$REQUIRED_LOCATION" ]; then
+            echo "::error::AZURE_LOCATION is set to '$CONFIGURED_LOCATION', but this project is locked to '$REQUIRED_LOCATION' (the only region confirmed to work on this subscription). Update the AZURE_LOCATION repo variable or this workflow's REQUIRED_LOCATION if that has genuinely changed."
+            exit 1
+          fi
+
+          if az group show --name "$RG" &>/dev/null; then
+            EXISTING_LOCATION=$(az group show --name "$RG" --query location -o tsv)
+            if [ "$EXISTING_LOCATION" != "$REQUIRED_LOCATION" ]; then
+              echo "::error::Resource group '$RG' already exists but its location is '$EXISTING_LOCATION', not '$REQUIRED_LOCATION'. Refusing to proceed - delete and recreate the group manually if you intend to change this."
+              exit 1
+            fi
+            echo "Resource group '$RG' already exists in '$REQUIRED_LOCATION' - skipping creation."
+          else
+            echo "Creating resource group '$RG' in '$REQUIRED_LOCATION'..."
+            az group create --name "$RG" --location "$REQUIRED_LOCATION"
+          fi
 
       - name: Deploy Bicep (resource-group scope)
         uses: azure/arm-deploy@v2
@@ -52,7 +81,7 @@ jobs:
           resourceGroupName: ${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}
           template: infra/main.bicep
           parameters: >
-            location=${{ vars.AZURE_LOCATION || 'uaenorth' }}
+            location=uaenorth
             aksClusterName=${{ vars.AKS_CLUSTER_NAME || 'aks-sample-cluster' }}
 
       - name: Assign AKS Cluster Admin role to the CI service principal
