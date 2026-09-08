@@ -1,0 +1,144 @@
+name: App CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'k8s/**'
+      - '.github/workflows/ci-cd.yml'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+
+env:
+  IMAGE_NAME: ${{ vars.DOCKERHUB_USERNAME }}/aks-sample-app
+
+jobs:
+  sast:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@v3
+
+  sca:
+    name: SCA (npm audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  build-scan-push:
+    name: Build, scan & push image
+    needs: [sast, sca]
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (not pushed yet)
+        run: docker build -t "$IMAGE_NAME:${{ steps.meta.outputs.tag }}" app/
+
+      - name: Scan image with Trivy (fail on CRITICAL)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}'
+          severity: 'CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Full Trivy report (HIGH+CRITICAL, informational, uploaded to Security tab)
+        uses: aquasecurity/trivy-action@0.24.0
+        if: always()
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '0'
+          format: 'sarif'
+          output: 'trivy-report.sarif'
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-report.sarif'
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push image
+        run: |
+          docker tag "$IMAGE_NAME:${{ steps.meta.outputs.tag }}" "$IMAGE_NAME:latest"
+          docker push "$IMAGE_NAME:${{ steps.meta.outputs.tag }}"
+          docker push "$IMAGE_NAME:latest"
+
+  deploy:
+    name: Deploy to AKS
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}" \
+            --name "${{ vars.AKS_CLUSTER_NAME || 'aks-sample-cluster' }}" \
+            --admin --overwrite-existing
+
+      - name: Install/upgrade NGINX ingress controller
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx --create-namespace \
+            --set controller.replicaCount=1 \
+            --set controller.resources.requests.cpu=100m \
+            --set controller.resources.requests.memory=128Mi \
+            --set controller.service.type=LoadBalancer
+
+      - name: Deploy application manifests
+        run: |
+          IMAGE="$IMAGE_NAME:${{ needs.build-scan-push.outputs.image_tag }}"
+          sed "s|__IMAGE__|$IMAGE|g" k8s/deployment.yaml > k8s/deployment.rendered.yaml
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/deployment.rendered.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/ingress.yaml
+          kubectl rollout status deployment/sample-app -n sample-app --timeout=120s
+
+      - name: Print ingress public IP
+        run: |
+          echo "Waiting for external IP (can take 1-2 min on first run)..."
+          kubectl get svc -n ingress-nginx ingress-nginx-controller -w &
+          WPID=$!
+          sleep 60
+          kill $WPID 2>/dev/null || true
+          kubectl get svc -n ingress-nginx ingress-nginx-controller
