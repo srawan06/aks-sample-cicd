@@ -5,7 +5,7 @@ param location string
 param aksClusterName string
 
 @description('VM size for the single node')
-param nodeVmSize string = 'Standard_B2s'
+param nodeVmSize string = 'Standard_B2s_v2'
 
 @description('Kubernetes version - leave empty to use AKS default')
 param kubernetesVersion string = ''
@@ -27,7 +27,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-10-01' = {
     disableLocalAccounts: false // keep simple kubeconfig auth for learning
     agentPoolProfiles: [
       {
-        name: 'nodepool1'
+        name: 'systempool'
         count: 1 // single-node constraint
         vmSize: nodeVmSize
         osType: 'Linux'

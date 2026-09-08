@@ -47,30 +47,23 @@ jobs:
       # So we create the resource group as a plain CLI step, then deploy
       # the Bicep template into it at resource-group scope.
       #
-      # KNOWN COSMETIC MISMATCH (tracked, not yet cleaned up): rg-aks-sample
-      # itself carries a 'malaysiawest' location label from an early debugging
-      # step, but the AKS cluster inside it genuinely runs in 'uaenorth'
-      # (enforced below via the Bicep deploy parameters, independent of the
-      # RG's label). A resource group's location is just metadata for its own
-      # deployment history - it doesn't constrain where resources inside it
-      # run. TODO: delete and recreate rg-aks-sample cleanly in uaenorth once
-      # the full pipeline is validated end-to-end.
+      # This subscription's public IP quota (3) and AKS access were only
+      # confirmed to work in uaenorth - we lock to that region here.
       - name: Create resource group (idempotent)
         run: |
-          RG_REQUIRED_LOCATION="malaysiawest" # matches rg-aks-sample's existing label - see note above
-          CLUSTER_LOCATION="uaenorth"          # where the AKS cluster itself actually runs
+          LOCATION="uaenorth"
           RG="${{ vars.AKS_RESOURCE_GROUP || 'rg-aks-sample' }}"
 
           if az group show --name "$RG" &>/dev/null; then
             EXISTING_LOCATION=$(az group show --name "$RG" --query location -o tsv)
-            if [ "$EXISTING_LOCATION" != "$RG_REQUIRED_LOCATION" ]; then
-              echo "::error::Resource group '$RG' exists but its location is '$EXISTING_LOCATION', expected '$RG_REQUIRED_LOCATION'. If you cleaned this up manually, update RG_REQUIRED_LOCATION in this workflow to match."
+            if [ "$EXISTING_LOCATION" != "$LOCATION" ]; then
+              echo "::error::Resource group '$RG' exists but its location is '$EXISTING_LOCATION', expected '$LOCATION'. Delete it manually first if you intend to recreate it in the right region."
               exit 1
             fi
-            echo "Resource group '$RG' already exists (label: '$EXISTING_LOCATION'); AKS cluster will be deployed into it targeting '$CLUSTER_LOCATION' - skipping RG creation."
+            echo "Resource group '$RG' already exists in '$LOCATION' - skipping creation."
           else
-            echo "Creating resource group '$RG' in '$CLUSTER_LOCATION'..."
-            az group create --name "$RG" --location "$CLUSTER_LOCATION"
+            echo "Creating resource group '$RG' in '$LOCATION'..."
+            az group create --name "$RG" --location "$LOCATION"
           fi
 
       - name: Deploy Bicep (resource-group scope)
