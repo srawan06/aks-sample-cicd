@@ -1,0 +1,19 @@
+# ClusterIssuer tells cert-manager WHICH certificate authority to request
+# certs from, and HOW to prove domain ownership. We use Let's Encrypt's
+# HTTP-01 challenge, which cert-manager satisfies automatically by
+# creating a temporary path on our EXISTING nginx ingress - no extra
+# public IP or DNS record needed beyond what we already have.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: shahidrasool@hotmail.com # used for expiry/problem notifications only
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
