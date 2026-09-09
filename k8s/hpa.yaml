@@ -1,0 +1,22 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sample-app
+  namespace: sample-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-app
+  minReplicas: 1
+  maxReplicas: 4 # kept modest - single small node also runs monitoring + ingress
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50 # scale up once average CPU > 50% of the 100m request
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60 # wait 60s of low usage before scaling back down, to avoid flapping
