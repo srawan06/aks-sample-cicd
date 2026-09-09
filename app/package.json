@@ -8,7 +8,8 @@
     "test": "echo \"no tests yet\" && exit 0"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "helmet": "^7.1.0"
   },
   "overrides": {
     "tar": "^7.5.19"

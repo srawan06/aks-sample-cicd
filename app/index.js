@@ -1,8 +1,21 @@
 const express = require('express');
+const helmet = require('helmet');
 const os = require('os');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Security headers - fixes ZAP baseline scan findings:
+// X-Content-Type-Options, X-Powered-By leak, CSP, Cross-Origin-Resource-Policy
+app.use(helmet());
+app.disable('x-etag'); // avoid unnecessary caching hints on dynamic responses
+
+// helmet doesn't set these two by default - add explicitly
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 app.get('/', (req, res) => {
   res.json({
